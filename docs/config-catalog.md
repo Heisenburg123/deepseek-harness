@@ -655,6 +655,22 @@ export interface Config {
 
 Source: [`packages/context/file-reference-local/src/index.ts:35`](../packages/context/file-reference-local/src/index.ts)
 
+<a id="deepseek-aidsh-final-response-presentation"></a>
+
+## `@deepseek-ai/dsh-final-response-presentation`
+
+```ts config-catalog
+/** Configuration of the neutral service row. */
+export interface Config {
+  /** Default deadline for one display transform. */
+  timeoutMs?: number
+  /** Maximum UTF-8 bytes accepted from a transformer. */
+  maxOutputBytes?: number
+}
+```
+
+Source: [`packages/core/final-response-presentation/src/index.ts:27`](../packages/core/final-response-presentation/src/index.ts)
+
 <a id="deepseek-aidsh-fs-local"></a>
 
 ## `@deepseek-ai/dsh-fs-local`
@@ -724,7 +740,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/bundle/headless/src/index.ts:31`](../packages/bundle/headless/src/index.ts)
+Source: [`packages/bundle/headless/src/index.ts:34`](../packages/bundle/headless/src/index.ts)
 
 <a id="deepseek-aidsh-hooks-claude-code"></a>
 

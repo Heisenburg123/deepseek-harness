@@ -12,7 +12,7 @@ import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session/types'
 // cordis Context merge (via dsh-agent) must not enter client aggregates.
 import type { SessionProjectionMap } from '@deepseek-ai/dsh-session-projection/types'
 import type { RpcId, RpcRequest, RpcResponse } from './rpc.ts'
-import type { ToolEventView } from './events.ts'
+import type { FinalResponsePresentation, ToolEventView } from './events.ts'
 import type { WorkspaceId } from './workspace.ts'
 
 declare module '@deepseek-ai/dsh-session-projection/types' {
@@ -68,6 +68,8 @@ declare module '@deepseek-ai/dsh-llm' {
 export interface HistoryEntry {
   event: SessionEvent
   view?: ToolEventView
+  /** Ephemeral display projection; absent means render the canonical event. */
+  presentation?: FinalResponsePresentation
 }
 
 /**

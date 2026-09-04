@@ -16,6 +16,9 @@ import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+// Optional display-only boundary; direct compositions without it keep the
+// durable canonical output path.
+import type {} from '@deepseek-ai/dsh-final-response-presentation'
 // Empty type imports carry the loader Context merge for the settlement await
 // and the cmdline Context merge for the appExit host value.
 import type {} from '@deepseek-ai/cordis-plugin-loader'
@@ -126,7 +129,11 @@ async function run(ctx: Context, task: string, io: HeadlessIo): Promise<void> {
   await agent.whenIdle()
   await sessions.flush(agent.session)
   const outcome = summarize(agent.session.events, firstSeq)
-  io.stdout.write(outcome.text + '\n')
+  const boundary = ctx.get('finalResponsePresentation')
+  const presentation = boundary === undefined
+    ? undefined
+    : await boundary.present(agent, agent.session.events.filter(event => event.seq >= firstSeq))
+  io.stdout.write((presentation?.kind === 'presented' ? presentation.text : outcome.text) + '\n')
   if (outcome.reason?.kind === 'error') {
     io.stderr.write(`dsh: ${outcome.reason.error.code}: ${outcome.reason.error.message}\n`)
   }

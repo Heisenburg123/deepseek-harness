@@ -734,6 +734,43 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'finalResponsePresentation',
+    summary: 'Owns optional Agent-scoped presentation state and display projections.',
+    description: 'Owns optional Agent-scoped presentation state and display projections. Nothing in this service is serializable or emitted as a Session event.',
+    methods: [
+      {
+        signature: 'active(agent: Agent): boolean',
+        description: 'Whether this exact Agent currently opts into presentation buffering.',
+        parameters: [{ name: 'agent', description: 'Agent whose process-local presentation state is inspected.' }],
+        returns: 'Whether presentation is active for that Agent.',
+      },
+      {
+        signature: 'state(agent: Agent): PresentationState',
+        description: 'Read one exact Agent\'s state; an unregistered Agent is neutral epoch zero.',
+        parameters: [{ name: 'agent', description: 'Agent whose process-local presentation state is inspected.' }],
+        returns: 'The current selection mode and epoch.',
+      },
+      {
+        signature: 'activate(agent: Agent, selection: PresentationSelection): PresentationController',
+        description: 'Activate presentation for one exact Agent. The returned controller and all state unwind with that Agent\'s own context scope.',
+        parameters: [{ name: 'agent', description: 'Agent that owns the process-local selection and lifecycle.' }, { name: 'selection', description: 'Initial transformer, detached JSON config, and deadline.' }],
+        returns: 'A controller for atomic switch, disable, and state inspection.',
+      },
+      {
+        signature: 'annotation(session: Session, eventSeq: number): ResponsePresentationAnnotation | undefined',
+        description: 'Read a cached display annotation without changing canonical history.',
+        parameters: [{ name: 'session', description: 'Already-attached Session used as the read-only cache key.' }, { name: 'eventSeq', description: 'Exact canonical event sequence to annotate for display.' }],
+        returns: 'The transient annotation, or undefined when none is available.',
+      },
+      {
+        signature: 'async present(agent: Agent, events: readonly SessionEvent[]): Promise<FinalResponseDecision>',
+        description: 'Project one completed turn. Every failure and ambiguity returns neutral; the canonical event objects are never passed to application code.',
+        parameters: [{ name: 'agent', description: 'Agent whose active transformer may project the response.' }, { name: 'events', description: 'Completed canonical turn events to inspect without mutation.' }],
+        returns: 'A display-only projection or a neutral fail-closed decision.',
+      },
+    ],
+  },
+  {
     key: 'fs',
     summary: 'Abstract filesystem provider.',
     description: 'Abstract filesystem provider. Targets must preserve identity across aliases; reads expose regular UTF-8 text or typed errors, listings are stable and content-free, and mutations are atomic. Optional guards add stale protection without changing the unguarded provider contract.',
@@ -3350,6 +3387,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface FileReferenceCandidate {\n    path: string;\n    kind: \'file\' | \'directory\';\n}',
   },
   {
+    name: 'FinalResponseCandidate',
+    declaration: 'export interface FinalResponseCandidate {\n    readonly sessionId: string;\n    readonly turn: number;\n    readonly messageId: string;\n    readonly text: string;\n    readonly reason: TurnEndReason;\n    readonly epoch: number;\n}',
+  },
+  {
+    name: 'FinalResponseDecision',
+    declaration: 'export type FinalResponseDecision = PresentedFinalResponse | NeutralFinalResponse;',
+  },
+  {
+    name: 'FinalResponseTransformer',
+    declaration: 'export interface FinalResponseTransformer {\n    readonly id: string;\n    eligible?(candidate: FinalResponseCandidate, config: JsonValue | undefined): boolean;\n    transform(candidate: FinalResponseCandidate, config: JsonValue | undefined, signal: AbortSignal): unknown;\n}',
+  },
+  {
     name: 'FinishReason',
     declaration: 'export type FinishReason = FinishReasonMap[keyof FinishReasonMap];',
   },
@@ -3798,6 +3847,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ModelModalityMap {\n    text: \'text\';\n    image: \'image\';\n}',
   },
   {
+    name: 'NeutralFinalResponse',
+    declaration: 'export interface NeutralFinalResponse {\n    readonly kind: \'neutral\';\n    readonly reason: \'off\' | \'ineligible\' | \'invalid-candidate\' | \'invalid-output\' | \'exception\' | \'timeout\' | \'stale-epoch\';\n}',
+  },
+  {
     name: 'ObjectJsonSchema',
     declaration: 'export type ObjectJsonSchema = JsonSchemaNode & {\n    type: \'object\';\n};',
   },
@@ -3828,6 +3881,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'PrepareSessionOptions',
     declaration: 'export type PrepareSessionOptions = (CreateSessionOptions & {\n    readonly seedSource?: undefined;\n}) | RestoredSessionOptions;',
+  },
+  {
+    name: 'PresentationController',
+    declaration: 'export interface PresentationController {\n    switch(selection: PresentationSelection): PresentationState;\n    disable(): PresentationState;\n    state(): PresentationState;\n}',
+  },
+  {
+    name: 'PresentationSelection',
+    declaration: 'export interface PresentationSelection {\n    readonly transformer: FinalResponseTransformer;\n    readonly config?: JsonValue;\n    readonly timeoutMs?: number;\n}',
+  },
+  {
+    name: 'PresentationState',
+    declaration: 'export type PresentationState = {\n    readonly mode: \'off\';\n    readonly epoch: number;\n} | {\n    readonly mode: \'active\';\n    readonly epoch: number;\n    readonly transformerId: string;\n};',
+  },
+  {
+    name: 'PresentedFinalResponse',
+    declaration: 'export interface PresentedFinalResponse {\n    readonly kind: \'presented\';\n    readonly text: string;\n    readonly epoch: number;\n    readonly messageSeq: number;\n    readonly sourceMessageId: string;\n    readonly sourceEventSeqs: readonly number[];\n}',
   },
   {
     name: 'PresetOption',
@@ -3960,6 +4029,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ResolvedSubagentStartRequest',
     declaration: 'export interface ResolvedSubagentStartRequest extends SubagentStartRequest {\n    readonly descriptor: SubagentDescriptorData;\n}',
+  },
+  {
+    name: 'ResponsePresentationAnnotation',
+    declaration: 'export type ResponsePresentationAnnotation = {\n    readonly kind: \'suppress\';\n    readonly epoch: number;\n    readonly sourceMessageId: string;\n} | {\n    readonly kind: \'text\';\n    readonly epoch: number;\n    readonly sourceMessageId: string;\n    readonly text: string;\n};',
   },
   {
     name: 'RestoredSessionOptions',

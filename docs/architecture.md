@@ -48,6 +48,7 @@ Here are some core packages that contribute to the Cordis tree.
 | [`core/agent`](subsystems/core.md) | The `Agent` interface, live registry, and `agent/*` events | `ctx.agents` |
 | [`core/agent-loop`](subsystems/core.md) | The default driver implementing that interface | `ctx.agentLoop` |
 | [`core/scope`](subsystems/scope.md) | The per-agent scoped-registration primitive | library, no key |
+| [`core/final-response-presentation`](../packages/core/final-response-presentation/README.md) | Optional ephemeral display projection after canonical turn completion | `ctx.finalResponsePresentation` |
 | [`llm/llm`](subsystems/llm-streaming.md) | Message and stream vocabulary plus the adapter seam | `ctx.llm` |
 
 ## Events
@@ -94,6 +95,12 @@ Details: the [sequence diagram](agent-lifecycle.md), the [tool pipeline](tool-ex
 The session log is the source of the context the model sees. `deriveMessages()` projects model history from it, and raw `assistant/chunk` events preserve replay and UI fidelity. Fork, resume, transcripts, telemetry, and persistence all derive from this stream.
 
 **Model-visible means logged.** Anything that reaches a model request must be reconstructable from the log, and a runtime invariant asserts it. This is why a new model-visible input requires a new session event: extend `SessionEventMap` and render from the log.
+
+## Final response presentation
+
+Display-only expression belongs after the canonical log, not inside it. The optional [final-response-presentation](../packages/core/final-response-presentation/README.md) service receives a frozen plain-text candidate only after completed `turn/end`. It stores per-Agent selection and epoch in process-local state; no presented text becomes a `SessionEvent` or enters `deriveMessages()`.
+
+With no active transformer, transports keep their existing synchronous path. With one active, API Proxy buffers candidate chunks until completion and sends ephemeral annotations beside unchanged events; Web renders those annotations, and Headless chooses the same projection only after canonical persistence has flushed. Failure, ambiguity, or stale state returns the canonical text.
 
 ## Capability seams
 

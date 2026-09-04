@@ -14,7 +14,7 @@ import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatu
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import { AttachmentError, admitEncodedImages } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, freezeMessage, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
 import { isAppendSurfaceEvent, isJsonValue } from '@deepseek-ai/dsh-session'
@@ -36,9 +36,12 @@ import {
 } from '@deepseek-ai/dsh-agent-presets'
 import type { PresetBearingSession } from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-tools'
+// Optional display-only boundary. Shipped profiles compose its neutral row,
+// while direct API compositions remain valid without it.
+import type {} from '@deepseek-ai/dsh-final-response-presentation'
 import type {
   ApiProxy, ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
-  ModelCatalogFailure, ModelProviderGroup,
+  FinalResponsePresentation as WireFinalResponsePresentation, ModelCatalogFailure, ModelProviderGroup,
   ModelReasoning, MuxFrame, PromptContentPart, QuestionResponsePayload, SessionListMetadata, SessionProjectionsBlock, SessionSearchItem,
   QueuedInboxItem, SessionSummary, SettingsNamespaceView, SubagentAddress, JobView, ToolEventView,
   WorkspaceId, WorkspaceView,
@@ -749,15 +752,33 @@ function historyPage(
   beforeSeq: number | undefined,
   maxMessages: number | undefined,
   scope?: ScopeKey,
+  session?: Session,
 ): { events: HistoryEntry[]; hasMore: boolean } {
   const page = paginate(events, beforeSeq, maxMessages ?? DEFAULT_MAX_MESSAGES)
   return {
     events: page.events.map((event) => {
       const view = viewFor(ctx, event, callId => backscanArgs(page.events, callId), scope)
-      return { event, ...view === undefined ? {} : { view } }
+      const presentation = session === undefined ? undefined : presentationFor(ctx, session, event.seq)
+      return {
+        event,
+        ...view === undefined ? {} : { view },
+        ...presentation === undefined ? {} : { presentation },
+      }
     }),
     hasMore: page.hasMore,
   }
+}
+
+/** Project one process-local annotation onto the wire without changing its canonical event. */
+function presentationFor(ctx: Context, session: Session, eventSeq: number): WireFinalResponsePresentation | undefined {
+  const annotation = ctx.get('finalResponsePresentation')?.annotation(session, eventSeq)
+  if (annotation === undefined) return undefined
+  return annotation.kind === 'suppress'
+    ? { kind: 'suppress', epoch: annotation.epoch, sourceMessageId: MessageId(annotation.sourceMessageId) }
+    : {
+      kind: 'text', epoch: annotation.epoch, sourceMessageId: MessageId(annotation.sourceMessageId),
+      text: annotation.text,
+    }
 }
 
 /**
@@ -2163,7 +2184,14 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           // at N with a baseline folded to N+1.
           const scope = await presenterScopeFor(sessionId, sourceSession(source))
           const cut = historyCutOf(source, beforeSeq === undefined)
-          const page = historyPage(ctx, cut.events, beforeSeq, maxMessages, scope)
+          const page = historyPage(
+            ctx,
+            cut.events,
+            beforeSeq,
+            maxMessages,
+            scope,
+            source.kind === 'attached' ? source.session : undefined,
+          )
           return ok(request, {
             events: page.events,
             hasMore: page.hasMore,
@@ -3369,26 +3397,115 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         // per-turn call count: entries clear on turn/end; a table miss (stream
         // opened mid-turn) backscans the session's in-memory events instead.
         const openCalls = new Map<SessionId, Map<string, { name: string; args: unknown }>>()
+        const presentationBuffers = new Map<SessionId, SessionEvent[]>()
+        const deliveryChains = new Map<SessionId, Promise<void>>()
+
+        const plainAssistant = (event: SessionEvent): boolean =>
+          event.type === 'assistant/message'
+          && event.data.interrupted !== true
+          && event.data.message.content.length > 0
+          && event.data.message.content.every(block => block.type === 'text')
+
+        const publishSessionEvent = (
+          session: Session,
+          event: SessionEvent,
+          presentation?: WireFinalResponsePresentation,
+        ): void => {
+          if (event.type === 'tool/call') {
+            const data = event.data as ToolCallData
+            try {
+              let table = openCalls.get(session.id)
+              if (table === undefined) openCalls.set(session.id, table = new Map<string, { name: string; args: unknown }>())
+              table.set(data.callId, { name: data.name, args: JSON.parse(data.arguments) })
+            } catch {
+              // Unparseable model arguments: leave the table unset; the result view soft-falls.
+            }
+          } else if (event.type === 'turn/end') {
+            openCalls.delete(session.id)
+          }
+          const agent = ctx.agents.get(session.id)
+          const view = viewFor(
+            ctx, event,
+            callId => openCalls.get(session.id)?.get(callId) ?? backscanArgs(session.events, callId),
+            agent,
+          )
+          queue.push(frame({
+            type: 'session/event', sessionId: session.id, event,
+            ...view === undefined ? {} : { view },
+            ...presentation === undefined ? {} : { presentation },
+          }))
+        }
+
+        const flushCanonical = (session: Session, events: readonly SessionEvent[]): void => {
+          for (const event of events) publishSessionEvent(session, event)
+        }
+
+        const deliver = async (session: Session, event: SessionEvent): Promise<void> => {
+          const boundary = ctx.get('finalResponsePresentation')
+          const agent = ctx.agents.get(session.id)
+          let buffered = presentationBuffers.get(session.id)
+          if (buffered === undefined) {
+            const startsCandidate = agent !== undefined
+              && boundary?.active(agent) === true
+              && (event.type === 'assistant/chunk' || plainAssistant(event))
+            if (!startsCandidate) {
+              publishSessionEvent(session, event)
+              return
+            }
+            buffered = []
+            presentationBuffers.set(session.id, buffered)
+          } else if (event.type === 'step/start') {
+            presentationBuffers.delete(session.id)
+            flushCanonical(session, buffered)
+            await deliver(session, event)
+            return
+          }
+
+          buffered.push(event)
+          if (event.type === 'assistant/message' && !plainAssistant(event)) {
+            presentationBuffers.delete(session.id)
+            flushCanonical(session, buffered)
+            return
+          }
+          if (event.type !== 'turn/end') return
+
+          presentationBuffers.delete(session.id)
+          if (agent === undefined || boundary === undefined) {
+            flushCanonical(session, buffered)
+            return
+          }
+          const decision = await boundary.present(agent, buffered)
+          if (decision.kind !== 'presented') {
+            flushCanonical(session, buffered)
+            return
+          }
+          for (const pending of buffered) {
+            publishSessionEvent(session, pending, presentationFor(ctx, session, pending.seq))
+          }
+        }
+
+        const scheduleDelivery = (session: Session, event: SessionEvent): void => {
+          const boundary = ctx.get('finalResponsePresentation')
+          const agent = ctx.agents.get(session.id)
+          if (!presentationBuffers.has(session.id) && (agent === undefined || boundary?.active(agent) !== true)) {
+            publishSessionEvent(session, event)
+            return
+          }
+          const previous = deliveryChains.get(session.id) ?? Promise.resolve()
+          const next = previous.then(() => deliver(session, event)).catch(() => {
+            const buffered = presentationBuffers.get(session.id)
+            if (buffered === undefined) return
+            presentationBuffers.delete(session.id)
+            flushCanonical(session, buffered)
+          })
+          deliveryChains.set(session.id, next)
+          void next.then(() => {
+            if (deliveryChains.get(session.id) === next) deliveryChains.delete(session.id)
+          })
+        }
         const disposers = [
           ctx.on('session/event', (session: Session, event: SessionEvent) => {
-            if (event.type === 'tool/call') {
-              const data = event.data as ToolCallData
-              try {
-                let table = openCalls.get(session.id)
-                if (table === undefined) openCalls.set(session.id, table = new Map<string, { name: string; args: unknown }>())
-                table.set(data.callId, { name: data.name, args: JSON.parse(data.arguments) })
-              } catch {
-                // Unparseable model arguments: leave the table unset; the result view soft-falls.
-              }
-            } else if (event.type === 'turn/end') {
-              openCalls.delete(session.id)
-            }
-            const view = viewFor(
-              ctx, event,
-              callId => openCalls.get(session.id)?.get(callId) ?? backscanArgs(session.events, callId),
-              ctx.agents.get(session.id),
-            )
-            queue.push(frame({ type: 'session/event', sessionId: session.id, event, ...view === undefined ? {} : { view } }))
+            scheduleDelivery(session, event)
           }),
           ctx.on('session/created', (session: Session) => {
             subscribeSession(queue, session)
@@ -3403,6 +3520,8 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           }),
           ctx.on('session/disposed', (session: Session) => {
             openCalls.delete(session.id)
+            presentationBuffers.delete(session.id)
+            deliveryChains.delete(session.id)
           }),
           ...jobs === undefined ? [] : [jobs.onJobsChanged((owner) => {
             if (owner !== undefined) {

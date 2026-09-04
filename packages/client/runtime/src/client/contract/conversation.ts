@@ -1,5 +1,5 @@
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
-import type { ToolEventView } from '@deepseek-ai/dsh-api-remotes/client'
+import type { FinalResponsePresentation, ToolEventView } from '@deepseek-ai/dsh-api-remotes/client'
 
 /* oxlint-disable typescript/no-duplicate-type-constituents, typescript/no-redundant-type-constituents --
  * The unaugmented declaration-merge maps intentionally resolve to never in the Runtime program;
@@ -9,6 +9,8 @@ import type { ToolEventView } from '@deepseek-ai/dsh-api-remotes/client'
 export interface ConversationEventInput {
   readonly event: SessionEvent
   readonly view: ToolEventView | undefined
+  /** Non-canonical render annotation supplied by the Host boundary. */
+  readonly presentation?: FinalResponsePresentation
 }
 
 /** Definition-local identity and lifecycle role extracted from one event. */

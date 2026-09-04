@@ -48,6 +48,7 @@ dsh --profile web --dump-config
 | [`core/agent`](subsystems/core.zh.md) | `Agent` 接口、活跃 agent 注册表和 `agent/*` 事件 | `ctx.agents` |
 | [`core/agent-loop`](subsystems/core.zh.md) | 实现该接口的默认驱动器 | `ctx.agentLoop` |
 | [`core/scope`](subsystems/scope.zh.md) | 按 agent 划分作用域的注册原语 | 库，无 ctx 键 |
+| [`core/final-response-presentation`](../packages/core/final-response-presentation/README.zh.md) | 规范轮次完成后的可选短暂显示投影 | `ctx.finalResponsePresentation` |
 | [`llm/llm`](subsystems/llm-streaming.zh.md) | 消息与流式词汇表，以及适配器 seam | `ctx.llm` |
 
 <a id="events"></a>
@@ -98,6 +99,12 @@ turn/end
 会话日志是模型所见上下文的来源。`deriveMessages()` 从中投影出模型历史，原始 `assistant/chunk` 事件则保证回放和 UI 保真。fork、恢复、transcript（文本记录）、遥测和持久化都派生自该事件流。
 
 **模型可见即已记录。** 抵达模型请求的一切都必须能从日志重建，并由一项运行时不变量断言这一点。因此，新增一项模型可见输入就需要新增一个会话事件：扩展 `SessionEventMap` 并从日志渲染。
+
+## 最终回复呈现
+
+仅供显示的表达应位于规范日志之后，而不是写入日志。可选的 [final-response-presentation](../packages/core/final-response-presentation/README.zh.md) 服务只在 completed `turn/end` 之后接收冻结的纯文本 candidate。它把每个 Agent 的选择和 epoch 保存在进程内状态中；presented 文本不会成为 `SessionEvent`，也不会进入 `deriveMessages()`。
+
+没有启用 transformer 时，transport 保持既有同步路径。启用后，API Proxy 把候选 chunk 缓冲到完成态，并在未修改事件旁发送短暂 annotation；Web 渲染这些 annotation，Headless 则只在规范持久化 flush 后选择同一投影。失败、歧义或过期状态都会返回规范文本。
 
 ## 能力 seam
 

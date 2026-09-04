@@ -42,6 +42,9 @@
       "path": "../../core/agent-default-model"
     },
     {
+      "path": "../../core/final-response-presentation"
+    },
+    {
       "path": "../../preset/agent-presets"
     },
     {

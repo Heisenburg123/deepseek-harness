@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import FinalResponsePresentation from '@deepseek-ai/dsh-final-response-presentation'
 import SessionStore from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
@@ -71,6 +72,7 @@ async function harness(): Promise<{ ctx: Context }> {
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(UserQuestionService)
   await ctx.plugin(AgentRegistry)
+  await ctx.plugin(FinalResponsePresentation)
   ctx.tools.register(tool('gen', {
     presentCall: () => ({ card: 'generic', title: 'gen call' }),
     presentResult: (_args, result) => ({ card: 'generic', title: result.isError ? 'gen failed' : 'gen done' }),
@@ -103,6 +105,55 @@ async function collect(iterable: AsyncIterable<RpcRequest<MuxFrame>>, count: num
 }
 
 describe('mux live view computation', () => {
+  it('ships display annotations beside unchanged canonical events and serves them from live history', async () => {
+    const { ctx } = await harness()
+    const api = createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
+    const abort = new AbortController()
+    const stream = api.events.mux({ rpcId: RpcId('presentation-mux'), payload: {} }, abort.signal)
+    const collected = collect(stream, 6, abort)
+    const session = ctx.sessions.create()
+    const agent = { id: session.id, session, status: 'idle', ctx } as Agent
+    ctx.agents.register(agent)
+    ctx.finalResponsePresentation.activate(agent, {
+      transformer: { id: 'test-presentation', transform: candidate => `Presented: ${candidate.text}` },
+    })
+
+    session.append('turn/start', { turn: 1 })
+    session.append('step/start', { turn: 1, step: 1 })
+    const chunk = session.append('assistant/chunk', {
+      turn: 1,
+      step: 1,
+      chunk: { type: 'text-delta', index: 0, text: 'Canonical' },
+    })
+    const message = session.append('assistant/message', {
+      turn: 1,
+      step: 1,
+      message: createMessage({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Canonical' }],
+        source: { kind: 'model', provider: 'p', model: 'm' },
+      }),
+    }, { surfaceOp: 'append', sourceEventSeqs: [chunk.seq] })
+    session.append('step/end', { turn: 1, step: 1 })
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+
+    const frames = (await collected).filter(frame => frame.type === 'session/event')
+    expect(frames.find(frame => frame.type === 'session/event' && frame.event.seq === chunk.seq)?.presentation)
+      .toMatchObject({ kind: 'suppress', epoch: 1 })
+    expect(frames.find(frame => frame.type === 'session/event' && frame.event.seq === message.seq)?.presentation)
+      .toMatchObject({ kind: 'text', epoch: 1, text: 'Presented: Canonical' })
+    expect(message.data.message.content).toEqual([{ type: 'text', text: 'Canonical' }])
+
+    const history = await api.sessions.history({
+      rpcId: RpcId('presentation-history'),
+      payload: { sessionId: session.id },
+    })
+    expect(history.result.ok).toBe(true)
+    if (!history.result.ok) throw new Error('expected history')
+    expect(history.result.value.events.find(entry => entry.event.seq === message.seq)?.presentation)
+      .toMatchObject({ kind: 'text', text: 'Presented: Canonical' })
+  })
+
   it('attaches the three standard card views, omits view without a presenter, soft-falls on throw', async () => {
     const { ctx } = await harness()
     const api = createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })

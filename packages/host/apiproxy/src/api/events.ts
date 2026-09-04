@@ -33,6 +33,11 @@ export type ToolEventView =
   | { for: 'call'; view: ToolCallView }
   | { for: 'result'; view: ToolResultView }
 
+/** Display-only annotation beside one unchanged canonical assistant event. */
+export type FinalResponsePresentation =
+  | { kind: 'suppress'; epoch: number; sourceMessageId: MessageId }
+  | { kind: 'text'; epoch: number; sourceMessageId: MessageId; text: string }
+
 /** One pending inbox occurrence in the authoritative `session/queue` snapshot. */
 export interface QueuedInboxItem {
   /** Message identity used by inbox mutations. */
@@ -67,7 +72,13 @@ export interface EventsApi {
  * approval/question frames (requested = answerable server-request, the rest are pure pushes).
  */
 export type MuxFrame =
-  | { type: 'session/event'; sessionId: SessionId; event: SessionEvent; view?: ToolEventView }
+  | {
+    type: 'session/event'
+    sessionId: SessionId
+    event: SessionEvent
+    view?: ToolEventView
+    presentation?: FinalResponsePresentation
+  }
   | { type: 'session/subscribed'; sessionId: SessionId; lastSeq: number }
   | { type: 'approval/requested'; sessionId: SessionId; approvalId: ApprovalRequestId; toolName: string; callId?: CallId; reason?: string }
   | { type: 'approval/resolved'; sessionId: SessionId; approvalId: ApprovalRequestId; outcome: ApprovalOutcome }

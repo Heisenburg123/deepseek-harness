@@ -5,6 +5,7 @@ import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { Inbox } from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import AgentDefaultModelConfig from '@deepseek-ai/dsh-agent-default-model'
+import FinalResponsePresentation from '@deepseek-ai/dsh-final-response-presentation'
 import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import SessionStore from '@deepseek-ai/dsh-session'
 import type { Session, UserMessage } from '@deepseek-ai/dsh-session'
@@ -16,6 +17,7 @@ afterEach(() => { Object.assign(internals, originalInternals) })
 interface Script {
   before?(session: Session): void
   afterPrompt(session: Session, message: UserMessage): Promise<void> | void
+  presentation?: (text: string) => string
 }
 
 function appendTurn(
@@ -56,6 +58,7 @@ async function bench(script: Script): Promise<{
   await ctx.plugin(SessionStore)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(AgentDefaultModelConfig, { provider: 'test-provider', model: 'test-model' })
+  await ctx.plugin(FinalResponsePresentation)
   ctx.agents.setFactory({
     async createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle> {
       const session = ctx.sessions.create(options.sessionId, {
@@ -82,6 +85,14 @@ async function bench(script: Script): Promise<{
         inject: () => {},
         whenIdle: () => idle,
       } satisfies Partial<Agent>)
+      if (script.presentation !== undefined) {
+        ctx.finalResponsePresentation.activate(agent, {
+          transformer: {
+            id: 'headless-test',
+            transform: candidate => script.presentation!(candidate.text),
+          },
+        })
+      }
       await options.setup?.(agentCtx)
       script.before?.(session)
       ctx.agents.register(agent)
@@ -108,6 +119,23 @@ async function bench(script: Script): Promise<{
 }
 
 describe('headless runner', () => {
+  it('writes a display projection while retaining the canonical assistant message', async () => {
+    let canonical = ''
+    const test = await bench({
+      presentation: text => `Presented: ${text}`,
+      afterPrompt(session, message) {
+        appendTurn(session, 1, message, 'Canonical result', true)
+        const assistant = session.deriveMessages().find(item => item.role === 'assistant')
+        const block = assistant?.content[0]
+        canonical = block?.type === 'text' ? block.text : ''
+      },
+    })
+
+    const result = await test.run()
+    expect(result.out).toBe('Presented: Canonical result\n')
+    expect(canonical).toBe('Canonical result')
+  })
+
   it('aggregates the final text across the complete idle-to-idle interval and flushes before exit', async () => {
     const test = await bench({
       before(session) {

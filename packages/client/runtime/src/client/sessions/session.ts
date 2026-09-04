@@ -4,7 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import type {
-  HistoryEntry, IApiClient, MessageId, MuxFrame, PromptContentPart, QueueAction, RpcError,
+  FinalResponsePresentation, HistoryEntry, IApiClient, MessageId, MuxFrame, PromptContentPart, QueueAction, RpcError,
   RpcId, RpcResponse, RpcResult, SessionId, SubagentAddress, ToolEventView,
 } from '@deepseek-ai/dsh-api-remotes/client'
 // Value import from the inline-safe wire layer (not the connection plugin):
@@ -68,6 +68,8 @@ export class Session implements SessionFace {
   /** Wire views aligned with `events` by index (envelope-level annotations; undefined = no view).
    *  Kept parallel rather than merged so `events` stays the raw log slice (model-visible ⟺ logged). */
   private views: (ToolEventView | undefined)[] = []
+  /** Display-only annotations aligned with `events`; never merged into raw history. */
+  private presentations: (FinalResponsePresentation | undefined)[] = []
   private baseSeq = 0
   private hasMore = false
   private openState: OpenState = 'cold'
@@ -102,7 +104,11 @@ export class Session implements SessionFace {
   private promptError: PromptError | null = null
   private lastAgentError: string | null = null
   /** Live events buffered during open/resync and stitched by sequence once history lands. */
-  private liveBuffer: { event: SessionEvent; view: ToolEventView | undefined }[] = []
+  private liveBuffer: {
+    event: SessionEvent
+    view: ToolEventView | undefined
+    presentation: FinalResponsePresentation | undefined
+  }[] = []
   /** Gap repair in flight; live events detour to the buffer until the tail page lands. */
   private stitching = false
   /** subscribed.lastSeq baseline (gap detection; null when no subscribed frame arrived — degrade to the liveBuffer dedup path). */
@@ -401,6 +407,7 @@ export class Session implements SessionFace {
       }
       this.events = [...older.map(e => e.event), ...this.events]
       this.views = [...older.map(e => e.view), ...this.views]
+      this.presentations = [...older.map(e => e.presentation), ...this.presentations]
       /* v8 ignore next -- the ?? arm needs older[0] undefined, but the empty-page branch above already returned. */
       this.baseSeq = older[0]?.event.seq ?? this.baseSeq
       this.hasMore = result.value.hasMore
@@ -430,6 +437,7 @@ export class Session implements SessionFace {
     this.openError = null
     this.events = []
     this.views = []
+    this.presentations = []
     this.baseSeq = 0
     // Superseded, not settled: the baseline replay re-sends still-pending requested frames verbatim
     // (same rpcId), re-minting fresh waits; a stale reference's respond() still reaches the host.
@@ -471,7 +479,7 @@ export class Session implements SessionFace {
   handleMuxEnvelope(rpcId: RpcId, frame: MuxFrame): void {
     switch (frame.type) {
       case 'session/event': {
-        this.acceptLiveEvent(frame.event, frame.view)
+        this.acceptLiveEvent(frame.event, frame.view, frame.presentation)
         return
       }
       case 'session/queue': {
@@ -657,6 +665,7 @@ export class Session implements SessionFace {
   private installWindow(entries: HistoryEntry[], hasMore: boolean, projections?: ProjectionsBaseline): void {
     this.events = entries.map(e => e.event)
     this.views = entries.map(e => e.view)
+    this.presentations = entries.map(e => e.presentation)
     this.baseSeq = this.events[0]?.seq ?? 0
     this.hasMore = hasMore
     if (this.events.some(event => event.type === 'turn/start')) this.firstPromptPendingTurn = false
@@ -664,19 +673,28 @@ export class Session implements SessionFace {
     if (projections !== undefined) this.projections.seed(projections)
     const buffered = this.liveBuffer
     this.liveBuffer = []
-    for (const item of buffered) this.appendLive(item.event, item.view)
+    for (const item of buffered) this.appendLive(item.event, item.view, item.presentation)
     this.notifier.markDirty()
   }
 
   /** Seq-guarded append shared by stitching and the open-state live path. */
-  private appendLive(event: SessionEvent, view?: ToolEventView): ConversationPublication {
+  private appendLive(
+    event: SessionEvent,
+    view?: ToolEventView,
+    presentation?: FinalResponsePresentation,
+  ): ConversationPublication {
     const tailSeq = this.windowTailSeq()
     if (tailSeq !== null && event.seq <= tailSeq) return 'none' // replay overlap, drop
     this.events.push(event)
     this.views.push(view)
+    this.presentations.push(presentation)
     if (event.type === 'turn/start') this.firstPromptPendingTurn = false
     const queueChanged = this.queueMirror.acceptDurable(event)
-    const publication = this.conversation.append({ event, view })
+    const publication = this.conversation.append({
+      event,
+      view,
+      ...(presentation === undefined ? {} : { presentation }),
+    })
     return queueChanged ? 'immediate' : publication
   }
 
@@ -685,19 +703,23 @@ export class Session implements SessionFace {
    *  expected reconnect-window artifact, repaired by refetch). The window stays one contiguous
    *  raw range, which lets Conversation Definitions correlate every recorded event between its
    *  ends and lets a compaction checkpoint resolve its cited summary event. */
-  private acceptLiveEvent(event: SessionEvent, view?: ToolEventView): void {
+  private acceptLiveEvent(
+    event: SessionEvent,
+    view?: ToolEventView,
+    presentation?: FinalResponsePresentation,
+  ): void {
     if (this.openState === 'loading' || this.stitching) {
-      this.liveBuffer.push({ event, view })
+      this.liveBuffer.push({ event, view, presentation })
       return
     }
     if (this.openState !== 'open') return // cold/error: no window upkeep (history fully backfills on open)
     const tailSeq = this.windowTailSeq()
     if (tailSeq !== null && event.seq > tailSeq + 1) {
-      this.liveBuffer.push({ event, view })
+      this.liveBuffer.push({ event, view, presentation })
       void this.repairGap()
       return
     }
-    this.scheduleConversation(this.appendLive(event, view))
+    this.scheduleConversation(this.appendLive(event, view, presentation))
   }
 
   /** Route assembler cadence into the Session's existing microtask/RAF notifier. */
@@ -785,7 +807,11 @@ export class Session implements SessionFace {
 
 /** Convert one wire history row into the assembler's transport-neutral input. */
 function conversationInput(entry: HistoryEntry): ConversationEventInput {
-  return { event: entry.event, view: entry.view }
+  return {
+    event: entry.event,
+    view: entry.view,
+    ...(entry.presentation === undefined ? {} : { presentation: entry.presentation }),
+  }
 }
 
 /** A generic command row alone remains control-plane content; every other visible Chat Node activates the conversation. */

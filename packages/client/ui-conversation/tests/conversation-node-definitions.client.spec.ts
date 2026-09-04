@@ -118,6 +118,41 @@ function toolResult(callId: string, text: string) {
 }
 
 describe('built-in conversation node Definitions', () => {
+  it('renders a final presentation annotation and suppresses its canonical source chunk', () => {
+    const chunk = {
+      ...at(3, 'assistant/chunk', {
+        turn: 1,
+        step: 1,
+        chunk: { type: 'text-delta', index: 0, text: 'Canonical stream' },
+      }),
+      presentation: { kind: 'suppress', epoch: 1, sourceMessageId: 'assistant-1' },
+    } as ConversationEventInput
+    const message = {
+      ...at(4, 'assistant/message', {
+        turn: 1,
+        step: 1,
+        message: assistantMessage('assistant-1', 'Canonical final'),
+      }, { surfaceOp: 'append', sourceEventSeqs: [3] }),
+      presentation: {
+        kind: 'text',
+        epoch: 1,
+        sourceMessageId: 'assistant-1',
+        text: 'Presented final',
+      },
+    } as ConversationEventInput
+    const value = assembler([
+      at(1, 'turn/start', { turn: 1 }),
+      at(2, 'step/start', { turn: 1, step: 1 }),
+      chunk,
+      message,
+      at(5, 'step/end', { turn: 1, step: 1 }),
+      at(6, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+    ])
+
+    expect(node(snapshot(value), 'assistant-step')?.data)
+      .toMatchObject({ blocks: [{ kind: 'text', text: 'Presented final' }] })
+  })
+
   it('keeps one keyed Assistant node while streaming settles and materializes interruption from Location', () => {
     const value = assembler([
       at(1, 'turn/start', { turn: 1 }),

@@ -189,6 +189,7 @@
     { "path": "./packages/interaction/permission-presets" },
     { "path": "./packages/core/tools" },
     { "path": "./packages/core/agent-tool-presentation" },
+    { "path": "./packages/core/final-response-presentation" },
     { "path": "./packages/skill/skill" },
     { "path": "./packages/skill/skill-badge" },
     { "path": "./packages/skill/skill-filesystem" },

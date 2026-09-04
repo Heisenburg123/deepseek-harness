@@ -79,6 +79,7 @@ function resetForRetry(state: AssistantState): AssistantState {
 
 function updateChunk(state: AssistantState, match: ConversationMatch): AssistantState {
   if (match.event.type !== 'assistant/chunk') return state
+  if (match.presentation?.kind === 'suppress') return state
   const chunk = match.event.data.chunk
   const blocks = [...state.blocks]
   switch (chunk.type) {
@@ -149,6 +150,9 @@ function finalNode(
   const final = state.final
   if (final?.event.type === 'assistant/message') {
     const event = final.event
+    const blocks = final.presentation?.kind === 'text'
+      ? [{ kind: 'text' as const, text: final.presentation.text }]
+      : toAssistantBlocks(event.data.message.content)
     return {
       kind: 'assistant',
       seq: event.seq,
@@ -156,7 +160,7 @@ function finalNode(
       time: event.time,
       turn: state.turn,
       step: state.step,
-      blocks: toAssistantBlocks(event.data.message.content),
+      blocks,
       usage: event.data.usage,
       timing: {
         stepStartTime: context.start?.event.time ?? null,
@@ -193,7 +197,9 @@ function fallbackState(context: ConversationNodeContext<AssistantState>): Assist
       state ??= initialState(match.event.data.turn, match.event.data.step)
       state = {
         ...state,
-        blocks: toAssistantBlocks(match.event.data.message.content),
+        blocks: match.presentation?.kind === 'text'
+          ? [{ kind: 'text', text: match.presentation.text }]
+          : toAssistantBlocks(match.event.data.message.content),
         hidden: false,
         final: match,
         usage: match.event.data.usage,
@@ -265,7 +271,9 @@ export const assistantDefinition: ConversationNodeDefinition<AssistantState> = {
     if (match.event.type === 'assistant/message') {
       return {
         ...context.state,
-        blocks: toAssistantBlocks(match.event.data.message.content),
+        blocks: match.presentation?.kind === 'text'
+          ? [{ kind: 'text', text: match.presentation.text }]
+          : toAssistantBlocks(match.event.data.message.content),
         hidden: false,
         final: match,
         usage: match.event.data.usage,

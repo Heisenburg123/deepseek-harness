@@ -58,6 +58,14 @@
     - id: agent
       name: '@deepseek-ai/dsh-agent'
 
+    # Optional post-semantic display boundary. With no scoped transformer it
+    # owns no state and every transport follows its existing canonical path.
+    - id: final-response-presentation
+      name: '@deepseek-ai/dsh-final-response-presentation'
+      config:
+        timeoutMs: 1000
+        maxOutputBytes: 65536
+
     # The transport-independent default for Agents created by entry points.
     # Settings may supply a saved selection; consumers read it at creation time.
     - id: agent-default-model
