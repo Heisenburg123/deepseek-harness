@@ -752,6 +752,15 @@ describe('running and lock semantics', () => {
     expect((textarea).value).toBe('typed')
   })
 
+  it('declares non-credential text-entry metadata', () => {
+    const { textarea } = bench()
+    expect(textarea.getAttribute('name')).toBe('dsh-message')
+    expect(textarea.getAttribute('autocomplete')).toBe('off')
+    expect(textarea.getAttribute('autocapitalize')).toBe('sentences')
+    expect(textarea.getAttribute('autocorrect')).toBe('off')
+    expect(textarea.getAttribute('spellcheck')).toBe('false')
+  })
+
   it('wheel over a non-overflowing draft forwards to the conversation host', () => {
     const host = document.createElement('div')
     host.setAttribute('data-conversation-scroll', '')

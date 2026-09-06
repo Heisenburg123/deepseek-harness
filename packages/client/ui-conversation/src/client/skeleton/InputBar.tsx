@@ -737,6 +737,11 @@ export function InputBar({
             <textarea
               ref={inputRef}
               className={css.input}
+              name="dsh-message"
+              autoComplete="off"
+              autoCapitalize="sentences"
+              autoCorrect="off"
+              spellCheck={false}
               value={draft}
               disabled={textareaDisabled}
               readOnly={machineBusy || workspaceTrigger}
