@@ -130,7 +130,10 @@ describe('mux live view computation', () => {
       step: 1,
       message: createMessage({
         role: 'assistant',
-        content: [{ type: 'text', text: 'Canonical' }],
+        content: [
+          { type: 'reasoning', text: 'Private rationale' },
+          { type: 'text', text: 'Canonical' },
+        ],
         source: { kind: 'model', provider: 'p', model: 'm' },
       }),
     }, { surfaceOp: 'append', sourceEventSeqs: [chunk.seq] })
@@ -142,7 +145,10 @@ describe('mux live view computation', () => {
       .toMatchObject({ kind: 'suppress', epoch: 1 })
     expect(frames.find(frame => frame.type === 'session/event' && frame.event.seq === message.seq)?.presentation)
       .toMatchObject({ kind: 'text', epoch: 1, text: 'Presented: Canonical' })
-    expect(message.data.message.content).toEqual([{ type: 'text', text: 'Canonical' }])
+    expect(message.data.message.content).toEqual([
+      { type: 'reasoning', text: 'Private rationale' },
+      { type: 'text', text: 'Canonical' },
+    ])
 
     const history = await api.sessions.history({
       rpcId: RpcId('presentation-history'),

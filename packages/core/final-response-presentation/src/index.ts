@@ -166,9 +166,11 @@ export function finalResponseCandidate(events: readonly SessionEvent[]): Extract
     && event.data.turn === turn
     && event.data.interrupted !== true)
   if (message?.type !== 'assistant/message') return undefined
-  if (message.data.message.content.length === 0
-    || message.data.message.content.some(block => block.type !== 'text')) return undefined
-  const text = message.data.message.content.map(block => block.type === 'text' ? block.text : '').join('')
+  const content = message.data.message.content
+  if (content.length === 0
+    || content.some(block => block.type !== 'text' && block.type !== 'reasoning')
+    || !content.some(block => block.type === 'text')) return undefined
+  const text = content.filter(block => block.type === 'text').map(block => block.text).join('')
   if (text.trim() === '') return undefined
   const sourceEventSeqs = (message as SessionEvent & { sourceEventSeqs?: number[] }).sourceEventSeqs ?? []
   return {

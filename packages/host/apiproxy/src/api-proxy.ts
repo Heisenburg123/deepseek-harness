@@ -3404,7 +3404,8 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           event.type === 'assistant/message'
           && event.data.interrupted !== true
           && event.data.message.content.length > 0
-          && event.data.message.content.every(block => block.type === 'text')
+          && event.data.message.content.some(block => block.type === 'text')
+          && event.data.message.content.every(block => block.type === 'text' || block.type === 'reasoning')
 
         const publishSessionEvent = (
           session: Session,

@@ -1,5 +1,5 @@
 /**
- * D-01 through D-22: optional post-semantic presentation, neutral failure,
+ * D-01 through D-23: optional post-semantic presentation, neutral failure,
  * epoch isolation, structural bypass, and canonical-log non-contamination.
  */
 
@@ -224,10 +224,13 @@ describe('final response presentation boundary', () => {
     expect(b).toMatchObject({ kind: 'presented', text: 'B voice', epoch: 2 })
   })
 
-  it('D-15: mixed/structured content bypasses before application code', async () => {
+  it('D-15: model reasoning stays private while final text remains presentable', async () => {
     const h = await harness()
-    let called = false
-    h.activate(transformer('structured', () => { called = true; return 'Changed' }))
+    let candidateText = ''
+    h.activate(transformer('reasoning-safe', (candidate) => {
+      candidateText = candidate.text
+      return 'Changed'
+    }))
     h.session.append('turn/start', { turn: 1 })
     h.session.append('step/start', { turn: 1, step: 1 })
     h.session.append('assistant/message', {
@@ -240,7 +243,32 @@ describe('final response presentation boundary', () => {
     }, { surfaceOp: 'append' })
     h.session.append('step/end', { turn: 1, step: 1 })
     h.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
-    expect((await h.ctx.finalResponsePresentation.present(h.agent, h.session.events)).kind).toBe('neutral')
+    expect(await h.ctx.finalResponsePresentation.present(h.agent, h.session.events))
+      .toMatchObject({ kind: 'presented', text: 'Changed' })
+    expect(candidateText).toBe('caption')
+  })
+
+  it('D-23: mixed text and tool calls still bypass before application code', async () => {
+    const h = await harness()
+    let called = false
+    h.activate(transformer('structured', () => { called = true; return 'Changed' }))
+    h.session.append('turn/start', { turn: 1 })
+    h.session.append('step/start', { turn: 1, step: 1 })
+    h.session.append('assistant/message', {
+      turn: 1, step: 1,
+      message: createMessage({
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'caption' },
+          { type: 'tool-call', id: CallId('call-mixed'), name: 'echo', arguments: '{"value":"fixed"}' },
+        ],
+        source: { kind: 'model', provider: 'mock', model: 'mock' },
+      }),
+    }, { surfaceOp: 'append' })
+    h.session.append('step/end', { turn: 1, step: 1 })
+    h.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    expect(await h.ctx.finalResponsePresentation.present(h.agent, h.session.events))
+      .toEqual({ kind: 'neutral', reason: 'invalid-candidate' })
     expect(called).toBe(false)
   })
 
